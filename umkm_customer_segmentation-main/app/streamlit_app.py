@@ -4,21 +4,19 @@ import sys
 
 import joblib
 import pandas as pd
-import requests
 import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.features import CLUSTER_NAMES, FEATURES
+from src.features import CLUSTER_NAMES, FEATURES, prepare_features
 
 st.set_page_config(
     page_title="Segmentasi Pelanggan UMKM",
     layout="wide"
 )
 
-API_URL = "http://127.0.0.1:8000/predict"
 DATA_PATH = PROJECT_ROOT / "data" / "data_pelanggan_clean.csv"
 MODEL_PATH = PROJECT_ROOT / "artifacts" / "model.joblib"
 METADATA_PATH = PROJECT_ROOT / "artifacts" / "metadata.json"
@@ -55,10 +53,15 @@ SEGMENT_DETAILS = {
 }
 
 
+@st.cache_resource(show_spinner=False)
+def load_model():
+    return joblib.load(MODEL_PATH)
+
+
 @st.cache_data(show_spinner=False)
 def load_segment_profiles():
     customers = pd.read_csv(DATA_PATH)
-    model = joblib.load(MODEL_PATH)
+    model = load_model()
     customers["cluster"] = model.predict(customers[FEATURES])
 
     profiles = (
@@ -381,61 +384,48 @@ with prediction_tab:
 
         try:
             with st.spinner("Menganalisis pelanggan..."):
-                response = requests.post(
-                    API_URL,
-                    json=data,
-                    timeout=15
-                )
-
-            if response.status_code == 200:
-                result = response.json()
-                cluster = int(result["cluster"])
+                features = prepare_features(data)
+                cluster = int(load_model().predict(features)[0])
                 profile = profile_by_cluster.loc[cluster]
 
-                with result_container.container(border=True):
-                    st.markdown(
-                        '<div class="panel-heading result-heading">Hasil untuk pelanggan ini</div>',
-                        unsafe_allow_html=True
-                    )
-                    result_column, cluster_column = st.columns(
-                        [2.5, 1],
-                        gap="large"
-                    )
-                    with result_column:
-                        st.markdown("**Segmen pelanggan**")
-                        st.subheader(result["segment"])
-                    with cluster_column:
-                        st.markdown("**Cluster**")
-                        st.subheader(str(cluster))
-
-                    st.markdown(
-                        f'**Karakteristik:** {SEGMENT_DETAILS[cluster]["summary"]}'
-                    )
-                    st.markdown("**Profil tipikal segmen (median)**")
-                    metric_columns = st.columns(3)
-                    metric_columns[0].metric(
-                        "Transaksi / 6 bulan",
-                        format_count(profile["median_transaksi"])
-                    )
-                    metric_columns[1].metric(
-                        "Total belanja",
-                        format_rupiah(profile["median_belanja"])
-                    )
-                    metric_columns[2].metric(
-                        "Hari sejak transaksi",
-                        f'{profile["median_hari_terakhir"]:.0f} hari'
-                    )
-                    st.markdown("**Rekomendasi penawaran**")
-                    st.write(SEGMENT_DETAILS[cluster]["recommendation"])
-        except requests.exceptions.ConnectionError:
-            with result_container.container():
-                st.error(
-                    "Layanan prediksi tidak dapat dihubungi. "
-                    "Pastikan FastAPI aktif di port 8000, lalu coba lagi."
+            with result_container.container(border=True):
+                st.markdown(
+                    '<div class="panel-heading result-heading">Hasil untuk pelanggan ini</div>',
+                    unsafe_allow_html=True
                 )
-        except requests.exceptions.RequestException as error:
+                result_column, cluster_column = st.columns(
+                    [2.5, 1],
+                    gap="large"
+                )
+                with result_column:
+                    st.markdown("**Segmen pelanggan**")
+                    st.subheader(CLUSTER_NAMES[cluster])
+                with cluster_column:
+                    st.markdown("**Cluster**")
+                    st.subheader(str(cluster))
+
+                st.markdown(
+                    f'**Karakteristik:** {SEGMENT_DETAILS[cluster]["summary"]}'
+                )
+                st.markdown("**Profil tipikal segmen (median)**")
+                metric_columns = st.columns(3)
+                metric_columns[0].metric(
+                    "Transaksi / 6 bulan",
+                    format_count(profile["median_transaksi"])
+                )
+                metric_columns[1].metric(
+                    "Total belanja",
+                    format_rupiah(profile["median_belanja"])
+                )
+                metric_columns[2].metric(
+                    "Hari sejak transaksi",
+                    f'{profile["median_hari_terakhir"]:.0f} hari'
+                )
+                st.markdown("**Rekomendasi penawaran**")
+                st.write(SEGMENT_DETAILS[cluster]["recommendation"])
+        except ValueError as error:
             with result_container.container():
-                st.error(f"Prediksi gagal: {error}")
+                st.error(f"Data pelanggan tidak valid: {error}")
 
 with profile_tab:
     st.markdown(
